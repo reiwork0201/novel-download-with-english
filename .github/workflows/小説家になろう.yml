@@ -20,7 +20,7 @@ jobs:
 
       - name: Install Python Dependencies
         run: |
-          pip install requests beautifulsoup4
+          pip install requests beautifulsoup4 deep_translator
 
       - name: Install rclone
         run: |
