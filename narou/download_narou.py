@@ -1,16 +1,16 @@
 import os
-import time
 import requests
 from bs4 import BeautifulSoup
 import re
 import subprocess
-from deep_translator import GoogleTranslator
+from deepl import DeepLCLI
 
 BASE_URL = 'https://ncode.syosetu.com'
 HISTORY_FILE = '小説家になろうダウンロード経歴.txt'
 LOCAL_HISTORY_PATH = f'/tmp/{HISTORY_FILE}'
 REMOTE_HISTORY_PATH = f'drive:{HISTORY_FILE}'
 
+deepl = DeepLCLI("ja", "en")  # 日本語→英語
 
 def fetch_url(url):
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -39,7 +39,6 @@ def save_history(history):
     subprocess.run(['rclone', 'copyto', LOCAL_HISTORY_PATH, REMOTE_HISTORY_PATH], check=True)
 
 
-# URL一覧の読み込み
 script_dir = os.path.dirname(__file__)
 url_file_path = os.path.join(script_dir, '小説家になろう.txt')
 with open(url_file_path, 'r', encoding='utf-8') as f:
@@ -53,7 +52,6 @@ for novel_url in urls:
         url = novel_url
         sublist = []
 
-        # ページ分割に対応
         while True:
             res = fetch_url(url)
             soup = BeautifulSoup(res.text, 'html.parser')
@@ -71,7 +69,10 @@ for novel_url in urls:
 
         download_from = history.get(novel_url, 0)
         base_path = f'/tmp/narou_dl/{title_text}'
-        os.makedirs(base_path, exist_ok=True)
+        jp_base = f'{base_path}/japanese'
+        en_base = f'{base_path}/english'
+        os.makedirs(jp_base, exist_ok=True)
+        os.makedirs(en_base, exist_ok=True)
 
         sub_len = len(sublist)
         new_max = download_from
@@ -85,14 +86,13 @@ for novel_url in urls:
             file_name = f'{i+1:03d}.txt'
             folder_num = (i // 999) + 1
             folder_name = f'{folder_num:03d}'
+            jp_folder = f'{jp_base}/{folder_name}'
+            en_folder = f'{en_base}/{folder_name}'
+            os.makedirs(jp_folder, exist_ok=True)
+            os.makedirs(en_folder, exist_ok=True)
 
-            ja_folder_path = f'{base_path}/japanese/{folder_name}'
-            en_folder_path = f'{base_path}/english/{folder_name}'
-            os.makedirs(ja_folder_path, exist_ok=True)
-            os.makedirs(en_folder_path, exist_ok=True)
-
-            ja_file_path = f'{ja_folder_path}/{file_name}'
-            en_file_path = f'{en_folder_path}/{file_name}'
+            jp_file_path = f'{jp_folder}/{file_name}'
+            en_file_path = f'{en_folder}/{file_name}'
 
             res = fetch_url(f'{BASE_URL}{link}')
             soup = BeautifulSoup(res.text, 'html.parser')
@@ -100,22 +100,21 @@ for novel_url in urls:
             sub_body_text = sub_body.get_text() if sub_body else '[本文が取得できませんでした]'
 
             # 日本語保存
-            with open(ja_file_path, 'w', encoding='UTF-8') as f:
+            with open(jp_file_path, 'w', encoding='UTF-8') as f:
                 f.write(f'{sub_title}\n\n{sub_body_text}')
 
-            # 翻訳 + 待機
+            # 英訳生成
             try:
-                translated = GoogleTranslator(source='ja', target='en').translate(sub_body_text)
-                time.sleep(2)  # 翻訳後の待機（2秒）
+                en_text = deepl.translate(sub_body_text)
             except Exception as e:
-                translated = '[翻訳に失敗しました]'
-                print(f'翻訳エラー: {file_name} → {e}')
+                en_text = '[翻訳に失敗しました]'
+                print(f'翻訳エラー: {e}')
 
             # 英語保存
             with open(en_file_path, 'w', encoding='UTF-8') as f:
-                f.write(f'{sub_title}\n\n{translated}')
+                f.write(f'{sub_title}\n\n{en_text}')
 
-            print(f'{file_name} downloaded and translated ({i+1}/{sub_len})')
+            print(f'{file_name} downloaded & translated in folder {folder_name} ({i+1}/{sub_len})')
             new_max = i + 1
 
         history[novel_url] = new_max
