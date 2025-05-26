@@ -9,7 +9,7 @@ BASE_URL = 'https://ncode.syosetu.com'
 HISTORY_FILE = '小説家になろうダウンロード経歴.txt'
 LOCAL_HISTORY_PATH = f'/tmp/{HISTORY_FILE}'
 REMOTE_HISTORY_PATH = f'drive:{HISTORY_FILE}'
-deepl = DeepLCLI("en", "ja")  # 日本語→英語
+deepl = DeepLCLI("en", "ja")  # ja→en翻訳
 
 def fetch_url(url):
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -35,37 +35,22 @@ def save_history(history):
             f.write(f'{url}  |  {last}\n')
     subprocess.run(['rclone', 'copyto', LOCAL_HISTORY_PATH, REMOTE_HISTORY_PATH], check=True)
 
-def split_into_chunks(text, max_length=1500):
-    sentences = re.split(r'(?<=[。！？\n])', text)
+def split_text(text, limit=1500):
+    # 文ごとに分割し、limit以内にまとまるように分割
+    sentences = re.split(r'(?<=[。！？])', text)
     chunks = []
-    current_chunk = ""
-
+    current = ''
     for sentence in sentences:
-        if len(current_chunk) + len(sentence) <= max_length:
-            current_chunk += sentence
+        if len(current) + len(sentence) > limit:
+            chunks.append(current.strip())
+            current = sentence
         else:
-            if current_chunk:
-                chunks.append(current_chunk)
-            current_chunk = sentence
-
-    if current_chunk:
-        chunks.append(current_chunk)
-
+            current += sentence
+    if current.strip():
+        chunks.append(current.strip())
     return chunks
 
-def deepl_translate_chunked(text, max_length=1500):
-    chunks = split_into_chunks(text, max_length)
-    translated = []
-    for chunk in chunks:
-        try:
-            result = deepl.translate(chunk)
-            translated.append(result)
-        except Exception as e:
-            print(f'翻訳エラー: {e}')
-            translated.append('[翻訳失敗]')
-    return ''.join(translated)
-
-# スクリプトと同じディレクトリにあるURL一覧ファイル
+# URL一覧の読み込み
 script_dir = os.path.dirname(__file__)
 url_file_path = os.path.join(script_dir, '小説家になろう.txt')
 with open(url_file_path, 'r', encoding='utf-8') as f:
@@ -95,13 +80,6 @@ for novel_url in urls:
         title_text = title_text.strip()
 
         download_from = history.get(novel_url, 0)
-        base_path = f'/tmp/narou_dl/{title_text}'
-        jp_base = os.path.join(base_path, 'japanese')
-        en_base = os.path.join(base_path, 'english')
-        os.makedirs(jp_base, exist_ok=True)
-        os.makedirs(en_base, exist_ok=True)
-
-        sub_len = len(sublist)
         new_max = download_from
 
         for i, sub in enumerate(sublist):
@@ -113,30 +91,33 @@ for novel_url in urls:
             file_name = f'{i+1:03d}.txt'
             folder_num = (i // 999) + 1
             folder_name = f'{folder_num:03d}'
-            jp_folder = os.path.join(jp_base, folder_name)
-            en_folder = os.path.join(en_base, folder_name)
-            os.makedirs(jp_folder, exist_ok=True)
-            os.makedirs(en_folder, exist_ok=True)
-
-            jp_file_path = os.path.join(jp_folder, file_name)
-            en_file_path = os.path.join(en_folder, file_name)
+            base_path = f'/tmp/narou_dl/{title_text}/{folder_name}'
+            jp_path = os.path.join(base_path, 'japanese')
+            en_path = os.path.join(base_path, 'english')
+            os.makedirs(jp_path, exist_ok=True)
+            os.makedirs(en_path, exist_ok=True)
+            jp_file = os.path.join(jp_path, file_name)
+            en_file = os.path.join(en_path, file_name)
 
             res = fetch_url(f'{BASE_URL}{link}')
             soup = BeautifulSoup(res.text, 'html.parser')
             sub_body = soup.select_one('.p-novel__body')
             sub_body_text = sub_body.get_text() if sub_body else '[本文が取得できませんでした]'
 
-            translated_text = deepl_translate_chunked(sub_body_text)
-
             # 保存（日本語）
-            with open(jp_file_path, 'w', encoding='UTF-8') as f:
+            with open(jp_file, 'w', encoding='UTF-8') as f:
                 f.write(f'{sub_title}\n\n{sub_body_text}')
 
+            # 翻訳処理
+            chunks = split_text(sub_body_text, 1500)
+            translated_chunks = [deepl.translate(chunk) for chunk in chunks]
+            translated_text = '\n'.join(translated_chunks)
+
             # 保存（英語）
-            with open(en_file_path, 'w', encoding='UTF-8') as f:
+            with open(en_file, 'w', encoding='UTF-8') as f:
                 f.write(f'{sub_title}\n\n{translated_text}')
 
-            print(f'{file_name} downloaded and translated in folder {folder_name} ({i+1}/{sub_len})')
+            print(f'{file_name} downloaded and translated in folder {folder_name} ({i+1}/{len(sublist)})')
             new_max = i + 1
 
         history[novel_url] = new_max
@@ -147,5 +128,5 @@ for novel_url in urls:
 
 save_history(history)
 
-# Google Drive へアップロード
+# Google Driveへアップロード
 subprocess.run(['rclone', 'copy', '/tmp/narou_dl', 'drive:', '--transfers=4', '--checkers=8', '--fast-list'], check=True)
