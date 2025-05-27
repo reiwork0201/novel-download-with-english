@@ -3,13 +3,14 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import subprocess
-from deepl import DeepLCLI
+from deepl import DeepLCLI  # 自作または既存のCLIラッパークラス
 
 BASE_URL = 'https://ncode.syosetu.com'
 HISTORY_FILE = '小説家になろうダウンロード経歴.txt'
 LOCAL_HISTORY_PATH = f'/tmp/{HISTORY_FILE}'
 REMOTE_HISTORY_PATH = f'drive:{HISTORY_FILE}'
-deepl = DeepLCLI("en", "ja")  # ja→en翻訳
+
+deepl = DeepLCLI("en", "ja")  # ja → en翻訳
 
 def fetch_url(url):
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -36,13 +37,14 @@ def save_history(history):
     subprocess.run(['rclone', 'copyto', LOCAL_HISTORY_PATH, REMOTE_HISTORY_PATH], check=True)
 
 def split_text(text, limit=1500):
-    # 文ごとに分割し、limit以内にまとまるように分割
+    # 文末（。！？）で分割し、1500字以内のチャンクにまとめる
     sentences = re.split(r'(?<=[。！？])', text)
     chunks = []
     current = ''
     for sentence in sentences:
         if len(current) + len(sentence) > limit:
-            chunks.append(current.strip())
+            if current:
+                chunks.append(current.strip())
             current = sentence
         else:
             current += sentence
@@ -64,8 +66,11 @@ for novel_url in urls:
         url = novel_url
         sublist = []
 
+        # 目次取得（ページをまたぐ）
         while True:
             res = fetch_url(url)
+            if not res.ok:
+                raise Exception(f"HTTPエラー: {res.status_code}")
             soup = BeautifulSoup(res.text, 'html.parser')
             title_text = soup.find('title').get_text()
             sublist += soup.select('.p-eplist__sublist .p-eplist__subtitle')
@@ -75,7 +80,7 @@ for novel_url in urls:
             else:
                 break
 
-        for char in ['<', '>', ':', '"', '/', '\\', '|', '?', '*']:
+        for char in '<>:"/\\|?*':
             title_text = title_text.replace(char, '')
         title_text = title_text.strip()
 
@@ -89,7 +94,7 @@ for novel_url in urls:
             sub_title = sub.text.strip()
             link = sub.get('href')
             file_name = f'{i+1:03d}.txt'
-            folder_num = (i // 999) + 1
+            folder_num = (i // 1000) + 1
             folder_name = f'{folder_num:03d}'
             base_path = f'/tmp/narou_dl/{title_text}/{folder_name}'
             jp_path = os.path.join(base_path, 'japanese')
@@ -99,6 +104,7 @@ for novel_url in urls:
             jp_file = os.path.join(jp_path, file_name)
             en_file = os.path.join(en_path, file_name)
 
+            # 本文取得
             res = fetch_url(f'{BASE_URL}{link}')
             soup = BeautifulSoup(res.text, 'html.parser')
             sub_body = soup.select_one('.p-novel__body')
@@ -108,9 +114,16 @@ for novel_url in urls:
             with open(jp_file, 'w', encoding='UTF-8') as f:
                 f.write(f'{sub_title}\n\n{sub_body_text}')
 
-            # 翻訳処理
-            chunks = split_text(sub_body_text, 1500)
-            translated_chunks = [deepl.translate(chunk) for chunk in chunks]
+            # 翻訳処理（チャンク分割後に逐次翻訳）
+            chunks = split_text(sub_body_text)
+            translated_chunks = []
+            for chunk in chunks:
+                try:
+                    translated = deepl.translate(chunk)
+                    translated_chunks.append(translated)
+                except Exception as e:
+                    translated_chunks.append("[翻訳失敗]")
+                    print(f'翻訳エラー: {e}')
             translated_text = '\n'.join(translated_chunks)
 
             # 保存（英語）
