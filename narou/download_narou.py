@@ -37,7 +37,6 @@ def save_history(history):
     subprocess.run(['rclone', 'copyto', LOCAL_HISTORY_PATH, REMOTE_HISTORY_PATH], check=True)
 
 def split_text(text, limit=1500):
-    # 文末（。！？）で分割し、1500字以内のチャンクにまとめる
     sentences = re.split(r'(?<=[。！？])', text)
     chunks = []
     current = ''
@@ -80,6 +79,7 @@ for novel_url in urls:
             else:
                 break
 
+        # 小説タイトルの整形（ファイル名に使えない文字除去）
         for char in '<>:"/\\|?*':
             title_text = title_text.replace(char, '')
         title_text = title_text.strip()
@@ -96,9 +96,10 @@ for novel_url in urls:
             file_name = f'{i+1:03d}.txt'
             folder_num = (i // 1000) + 1
             folder_name = f'{folder_num:03d}'
-            base_path = f'/tmp/narou_dl/{title_text}/{folder_name}'
-            jp_path = os.path.join(base_path, 'japanese')
-            en_path = os.path.join(base_path, 'english')
+
+            base_path = f'/tmp/narou_dl/{title_text}'
+            jp_path = os.path.join(base_path, 'japanese', folder_name)
+            en_path = os.path.join(base_path, 'english', folder_name)
             os.makedirs(jp_path, exist_ok=True)
             os.makedirs(en_path, exist_ok=True)
             jp_file = os.path.join(jp_path, file_name)
@@ -114,7 +115,7 @@ for novel_url in urls:
             with open(jp_file, 'w', encoding='UTF-8') as f:
                 f.write(f'{sub_title}\n\n{sub_body_text}')
 
-            # 翻訳処理（チャンク分割後に逐次翻訳）
+            # 翻訳（分割しつつ順に翻訳）
             chunks = split_text(sub_body_text)
             translated_chunks = []
             for chunk in chunks:
