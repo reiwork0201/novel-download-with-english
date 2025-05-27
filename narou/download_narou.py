@@ -10,7 +10,7 @@ HISTORY_FILE = '小説家になろうダウンロード経歴.txt'
 LOCAL_HISTORY_PATH = f'/tmp/{HISTORY_FILE}'
 REMOTE_HISTORY_PATH = f'drive:{HISTORY_FILE}'
 
-deepl = DeepLCLI("en", "ja")  # ja → en翻訳
+deepl = DeepLCLI("ja", "en")  # ja → en翻訳
 
 def fetch_url(url):
     headers = {'User-Agent': 'Mozilla/5.0'}
