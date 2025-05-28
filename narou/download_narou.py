@@ -37,21 +37,39 @@ def save_history(history):
     subprocess.run(['rclone', 'copyto', LOCAL_HISTORY_PATH, REMOTE_HISTORY_PATH], check=True)
 
 def split_text(text, limit=1500):
-    sentences = re.split(r'(?<=[。！？])', text)
+    sentence_end_pattern = re.compile(r'(。|！|？|」|』|】|）)')
     chunks = []
-    current = ''
-    for sentence in sentences:
-        if len(current) + len(sentence) > limit:
-            if current:
-                chunks.append(current.strip())
-            current = sentence
-        else:
-            current += sentence
-    if current.strip():
-        chunks.append(current.strip())
+    position = 0
+
+    while position < len(text):
+        next_boundary = position
+        last_good_boundary = None
+
+        while next_boundary < len(text):
+            match = sentence_end_pattern.search(text, next_boundary)
+            if not match:
+                break
+            end = match.end()
+            snippet = text[position:end]
+            if len(snippet) <= limit:
+                last_good_boundary = end
+                next_boundary = end
+            else:
+                break
+
+        if last_good_boundary is None:
+            approx_end = position + limit
+            while approx_end > position and not re.match(r'[。！？」』】）]', text[approx_end - 1]):
+                approx_end -= 1
+            last_good_boundary = approx_end if approx_end > position else position + limit
+
+        chunk = text[position:last_good_boundary].strip()
+        if chunk:
+            chunks.append(chunk)
+        position = last_good_boundary
+
     return chunks
 
-# URL一覧読み込み
 script_dir = os.path.dirname(__file__)
 url_file_path = os.path.join(script_dir, '小説家になろう.txt')
 with open(url_file_path, 'r', encoding='utf-8') as f:
@@ -65,7 +83,6 @@ for novel_url in urls:
         url = novel_url
         sublist = []
 
-        # 目次取得（ページ跨ぎ対応）
         while True:
             res = fetch_url(url)
             if not res.ok:
@@ -79,7 +96,6 @@ for novel_url in urls:
             else:
                 break
 
-        # タイトル整形
         for char in '<>:"/\\|?*':
             title_text = title_text.replace(char, '')
         title_text = title_text.strip()
@@ -94,7 +110,7 @@ for novel_url in urls:
             sub_title = sub.text.strip()
             link = sub.get('href')
             file_name = f'{i+1:03d}.txt'
-            folder_num = (i // 1000) + 1
+            folder_num = (i // 999) + 1
             folder_name = f'{folder_num:03d}'
 
             base_path = f'/tmp/narou_dl/{title_text}'
@@ -105,17 +121,14 @@ for novel_url in urls:
             jp_file = os.path.join(jp_path, file_name)
             en_file = os.path.join(en_path, file_name)
 
-            # 本文取得
             res = fetch_url(f'{BASE_URL}{link}')
             soup = BeautifulSoup(res.text, 'html.parser')
             sub_body = soup.select_one('.p-novel__body')
             sub_body_text = sub_body.get_text() if sub_body else '[本文が取得できませんでした]'
 
-            # 日本語保存
             with open(jp_file, 'w', encoding='utf-8') as f:
                 f.write(f'{sub_title}\n\n{sub_body_text}')
 
-            # 翻訳
             translated_chunks = []
             for chunk in split_text(sub_body_text):
                 try:
@@ -125,7 +138,6 @@ for novel_url in urls:
                     translated_chunks.append("[翻訳失敗]")
             translated_text = '\n'.join(translated_chunks)
 
-            # 英語保存
             with open(en_file, 'w', encoding='utf-8') as f:
                 f.write(f'{sub_title}\n\n{translated_text}')
 
@@ -138,8 +150,5 @@ for novel_url in urls:
         print(f'[エラー] {novel_url} → {e}')
         continue
 
-# 履歴保存
 save_history(history)
-
-# Google Driveアップロード
 subprocess.run(['rclone', 'copy', '/tmp/narou_dl', 'drive:', '--transfers=4', '--checkers=8', '--fast-list'], check=True)
