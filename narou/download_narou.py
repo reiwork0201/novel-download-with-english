@@ -3,18 +3,20 @@ import re
 import requests
 import subprocess
 from bs4 import BeautifulSoup
-from deepl import DeepLCLI
+from deepl import DeepLCLI  # 自作のCLIラッパー
 
 BASE_URL = 'https://ncode.syosetu.com'
 HISTORY_FILE = '小説家になろうダウンロード経歴.txt'
 LOCAL_HISTORY_PATH = f'/tmp/{HISTORY_FILE}'
 REMOTE_HISTORY_PATH = f'drive:{HISTORY_FILE}'
 
-DEEPL_LIMIT = 1500
-TRANSLATABLE_ENDINGS = '[。！？⁈⁉?!]'
-BRACKET_ENDINGS = '[」』】）]'
+DEEPL_RETRY = 3
+CHUNK_LIMIT = 1500
 
-deepl = DeepLCLI("ja", "en")
+BRACKETS = {'」', '』', '】', '）'}
+SENTENCE_END = {'。', '！', '？', '⁈', '⁉', '?', '!', '。', '！', '？'} | BRACKETS
+
+DEEPL = DeepLCLI("ja", "en")
 
 def fetch_url(url):
     headers = {'User-Agent': 'Mozilla/5.0'}
@@ -39,56 +41,43 @@ def save_history(history):
             f.write(f'{url}  |  {last}\n')
     subprocess.run(['rclone', 'copyto', LOCAL_HISTORY_PATH, REMOTE_HISTORY_PATH], check=True)
 
-def is_inside_brackets(text, idx):
-    bracket_stack = []
-    brackets = {'「': '」', '『': '』', '【': '】', '(': ')'}
-    for i, char in enumerate(text):
-        if char in brackets:
-            bracket_stack.append(brackets[char])
-        elif char in brackets.values():
-            if bracket_stack and bracket_stack[-1] == char:
-                bracket_stack.pop()
-        if i >= idx:
-            break
-    return bool(bracket_stack)
+def clean_text(text):
+    return re.sub(r'[\r\n]+', '', text).strip()
 
-def split_text(text, limit=DEEPL_LIMIT):
+def split_text(text, limit=CHUNK_LIMIT):
+    text = clean_text(text)
     chunks = []
-    position = 0
-    text = text.replace('\r\n', '\n').replace('\r', '\n')
-    
-    while position < len(text):
-        last_good_boundary = None
-        for match in re.finditer(f'{TRANSLATABLE_ENDINGS}|{BRACKET_ENDINGS}', text[position:position+limit+1]):
-            end = position + match.end()
-            if end - position > limit:
+    pos = 0
+    while pos < len(text):
+        max_end = min(pos + limit, len(text))
+        boundary = -1
+        for i in range(max_end, pos, -1):
+            if text[i - 1] in SENTENCE_END:
+                # 括弧内の句読点を避ける
+                segment = text[pos:i]
+                if segment.count('「') > segment.count('」') or segment.count('（') > segment.count('）'):
+                    continue
+                boundary = i
                 break
-            if not is_inside_brackets(text[position:end], match.end()-1):
-                last_good_boundary = end
-
-        if not last_good_boundary:
-            end = min(position + limit, len(text))
-            while end > position and not re.match(f'{TRANSLATABLE_ENDINGS}|{BRACKET_ENDINGS}', text[end - 1]):
-                end -= 1
-            last_good_boundary = end if end > position else position + limit
-
-        chunk = text[position:last_good_boundary].strip()
-        if chunk:
-            chunks.append(chunk)
-        position = last_good_boundary
+        if boundary == -1:
+            boundary = max_end
+        chunks.append(text[pos:boundary].strip())
+        pos = boundary
     return chunks
 
-def clean_and_retry_translation(chunk):
-    translated = deepl.translate(chunk)
-    # 残った日本語部分の抽出と再翻訳
-    jp_regex = re.compile(r'[\u3040-\u30FF\u4E00-\u9FFF]+')
-    if jp_regex.search(translated):
-        for jp in jp_regex.findall(translated):
-            try:
-                en = deepl.translate(jp)
-                translated = translated.replace(jp, en)
-            except:
-                continue
+def translate_with_retry(text):
+    for _ in range(DEEPL_RETRY):
+        try:
+            return DEEPL.translate(text)
+        except Exception as e:
+            print(f'翻訳失敗、リトライ: {e}')
+    return '[翻訳失敗]'
+
+def fix_incomplete_translation(original, translated):
+    jp_in_en = re.findall(r'[\u3040-\u30ff\u4e00-\u9fff]+', translated)
+    for frag in jp_in_en:
+        translated_frag = translate_with_retry(frag)
+        translated = translated.replace(frag, translated_frag)
     return translated
 
 script_dir = os.path.dirname(__file__)
@@ -135,7 +124,6 @@ for novel_url in urls:
             folder_name = f'{folder_num:03d}'
 
             base_path = f'/tmp/narou_dl/{title_text}'
-            os.makedirs(base_path, exist_ok=True)
             jp_path = os.path.join(base_path, 'japanese', folder_name)
             en_path = os.path.join(base_path, 'english', folder_name)
             os.makedirs(jp_path, exist_ok=True)
@@ -147,20 +135,19 @@ for novel_url in urls:
             soup = BeautifulSoup(res.text, 'html.parser')
             sub_body = soup.select_one('.p-novel__body')
             sub_body_text = sub_body.get_text() if sub_body else '[本文が取得できませんでした]'
+            sub_body_text = clean_text(sub_body_text)
 
             with open(jp_file, 'w', encoding='utf-8') as f:
                 f.write(f'{sub_title}\n\n{sub_body_text}')
 
             translated_chunks = []
             for chunk in split_text(sub_body_text):
-                try:
-                    translated = clean_and_retry_translation(chunk)
-                    translated_chunks.append(translated)
-                except Exception as e:
-                    print(f'翻訳エラー: {e}')
-                    translated_chunks.append("[翻訳失敗]")
+                translated = translate_with_retry(chunk)
+                translated = fix_incomplete_translation(chunk, translated)
+                translated_chunks.append(translated)
 
             translated_text = '\n'.join(translated_chunks)
+
             with open(en_file, 'w', encoding='utf-8') as f:
                 f.write(f'{sub_title}\n\n{translated_text}')
 
