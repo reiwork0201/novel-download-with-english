@@ -114,6 +114,7 @@ for novel_url in urls:
             folder_name = f'{folder_num:03d}'
 
             base_path = f'/tmp/narou_dl/{title_text}'
+            os.makedirs(base_path, exist_ok=True)
             jp_path = os.path.join(base_path, 'japanese', folder_name)
             en_path = os.path.join(base_path, 'english', folder_name)
             os.makedirs(jp_path, exist_ok=True)
