@@ -10,11 +10,22 @@ HISTORY_FILE = '小説家になろうダウンロード経歴.txt'
 LOCAL_HISTORY_PATH = f'/tmp/{HISTORY_FILE}'
 REMOTE_HISTORY_PATH = f'drive:{HISTORY_FILE}'
 
-deepl = DeepLCLI("ja", "en")  # ja→enの翻訳器
+DEEPL_CHUNK_LIMIT = 1500
+
+DEEPL = DeepLCLI("ja", "en")  # ja→enの翻訳器
+
+# 文末・閉じ括弧パターン
+SENTENCE_END_PATTERN = re.compile(r'(。|！|？|⁈|⁉|!|\?|」|』|】|）)')
+
+# 括弧内判定用
+OPEN_BRACKETS = {'「': '」', '『': '』', '【': '】', '（': '）', '(': ')'}
+CLOSE_BRACKETS = set(OPEN_BRACKETS.values())
+
 
 def fetch_url(url):
     headers = {'User-Agent': 'Mozilla/5.0'}
     return requests.get(url, headers=headers)
+
 
 def load_history():
     if not os.path.exists(LOCAL_HISTORY_PATH):
@@ -30,45 +41,47 @@ def load_history():
                     history[url.rstrip('/')] = int(last)
     return history
 
+
 def save_history(history):
     with open(LOCAL_HISTORY_PATH, 'w', encoding='utf-8') as f:
         for url, last in history.items():
             f.write(f'{url}  |  {last}\n')
     subprocess.run(['rclone', 'copyto', LOCAL_HISTORY_PATH, REMOTE_HISTORY_PATH], check=True)
 
-def split_text(text, limit=1500):
-    sentence_end_pattern = re.compile(r'(。|！|？|」|』|】|）)')
+
+def split_text(text, limit=DEEPL_CHUNK_LIMIT):
     chunks = []
-    position = 0
+    pos = 0
+    while pos < len(text):
+        last_good = None
+        bracket_stack = []
+        match_iter = SENTENCE_END_PATTERN.finditer(text, pos)
 
-    while position < len(text):
-        next_boundary = position
-        last_good_boundary = None
-
-        while next_boundary < len(text):
-            match = sentence_end_pattern.search(text, next_boundary)
-            if not match:
-                break
+        for match in match_iter:
             end = match.end()
-            snippet = text[position:end]
-            if len(snippet) <= limit:
-                last_good_boundary = end
-                next_boundary = end
-            else:
+            segment = text[pos:end]
+            if len(segment) > limit:
                 break
 
-        if last_good_boundary is None:
-            approx_end = position + limit
-            while approx_end > position and not re.match(r'[。！？」』】）]', text[approx_end - 1]):
-                approx_end -= 1
-            last_good_boundary = approx_end if approx_end > position else position + limit
+            char = match.group(1)
+            if char in OPEN_BRACKETS:
+                bracket_stack.append(OPEN_BRACKETS[char])
+            elif char in CLOSE_BRACKETS and bracket_stack and bracket_stack[-1] == char:
+                bracket_stack.pop()
 
-        chunk = text[position:last_good_boundary].strip()
+            if not bracket_stack:
+                last_good = end
+
+        if last_good is None:
+            approx_end = min(len(text), pos + limit)
+            last_good = approx_end
+        chunk = text[pos:last_good].strip()
         if chunk:
             chunks.append(chunk)
-        position = last_good_boundary
+        pos = last_good
 
     return chunks
+
 
 script_dir = os.path.dirname(__file__)
 url_file_path = os.path.join(script_dir, '小説家になろう.txt')
@@ -133,7 +146,7 @@ for novel_url in urls:
             translated_chunks = []
             for chunk in split_text(sub_body_text):
                 try:
-                    translated_chunks.append(deepl.translate(chunk))
+                    translated_chunks.append(DEEPL.translate(chunk))
                 except Exception as e:
                     print(f'翻訳エラー: {e}')
                     translated_chunks.append("[翻訳失敗]")
