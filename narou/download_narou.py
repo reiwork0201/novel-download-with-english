@@ -14,7 +14,7 @@ DEEPL_RETRY = 3
 
 DEEPL = DeepLCLI("ja", "en")
 
-# rcloneアップロード前のエラー防止用に事前作成
+# /tmp/narou_dl を事前作成
 os.makedirs('/tmp/narou_dl', exist_ok=True)
 
 def fetch_url(url):
@@ -62,12 +62,27 @@ def split_by_delimiters(text):
             chunks.append(buf.strip())
             buf = ''
 
-    if buf.strip():
+    if buf.strip():  # 最後に残った部分も含める
         chunks.append(buf.strip())
+
     return chunks
 
-def group_chunks(chunks, n=10):
-    return [''.join(chunks[i:i+n]) for i in range(0, len(chunks), n)]
+def group_chunks(chunks, group_size=10):
+    grouped = []
+    temp = []
+    for chunk in chunks:
+        temp.append(chunk)
+        if len(temp) == group_size:
+            grouped.append(''.join(temp))
+            temp = []
+    if temp:
+        grouped.append(''.join(temp))
+    return grouped
+
+def split_text(text):
+    text = clean_text(text)
+    sentence_chunks = split_by_delimiters(text)
+    return group_chunks(sentence_chunks, 10)
 
 def translate_with_retry(text):
     for _ in range(DEEPL_RETRY):
@@ -84,6 +99,7 @@ def fix_incomplete_translation(original, translated):
         translated = translated.replace(frag, translated_frag)
     return translated
 
+# 実行部分
 script_dir = os.path.dirname(__file__)
 url_file_path = os.path.join(script_dir, '小説家になろう.txt')
 with open(url_file_path, 'r', encoding='utf-8') as f:
@@ -144,14 +160,10 @@ for novel_url in urls:
             with open(jp_file, 'w', encoding='utf-8') as f:
                 f.write(f'{sub_title}\n\n{sub_body_text}')
 
-            # 分割＆翻訳処理
-            chunks = split_by_delimiters(sub_body_text)
-            grouped_chunks = group_chunks(chunks, n=10)
-
             translated_chunks = []
-            for group in grouped_chunks:
-                translated = translate_with_retry(group)
-                translated = fix_incomplete_translation(group, translated)
+            for chunk in split_text(sub_body_text):
+                translated = translate_with_retry(chunk)
+                translated = fix_incomplete_translation(chunk, translated)
                 translated_chunks.append(translated)
 
             translated_text = '\n'.join(translated_chunks)
