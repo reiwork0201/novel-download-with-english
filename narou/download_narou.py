@@ -11,10 +11,6 @@ LOCAL_HISTORY_PATH = f'/tmp/{HISTORY_FILE}'
 REMOTE_HISTORY_PATH = f'drive:{HISTORY_FILE}'
 
 DEEPL_RETRY = 3
-CHUNK_LIMIT = 1500
-
-BRACKETS = {'」', '』', '】', '）'}
-SENTENCE_END = {'。', '！', '？', '⁈', '⁉', '?', '!', '。', '！', '？'} | BRACKETS
 
 DEEPL = DeepLCLI("ja", "en")
 
@@ -44,26 +40,34 @@ def save_history(history):
 def clean_text(text):
     return re.sub(r'[\r\n]+', '', text).strip()
 
-def split_text(text, limit=CHUNK_LIMIT):
-    text = clean_text(text)
+def split_by_delimiters(text):
+    delimiters = set('。！？⁈⁉?!.」』】）]”>》}')
+    open_brackets = {'「', '『', '【', '（', '[', '“', '<', '《', '{'}
+    close_brackets = {'」', '』', '】', '）', ']', '”', '>', '》', '}'}
+
     chunks = []
-    pos = 0
-    while pos < len(text):
-        max_end = min(pos + limit, len(text))
-        boundary = -1
-        for i in range(max_end, pos, -1):
-            if text[i - 1] in SENTENCE_END:
-                # 括弧内の句読点を避ける
-                segment = text[pos:i]
-                if segment.count('「') > segment.count('」') or segment.count('（') > segment.count('）'):
-                    continue
-                boundary = i
-                break
-        if boundary == -1:
-            boundary = max_end
-        chunks.append(text[pos:boundary].strip())
-        pos = boundary
+    buf = ''
+    stack = []
+
+    for ch in text:
+        buf += ch
+        if ch in open_brackets:
+            stack.append(ch)
+        elif ch in close_brackets and stack:
+            stack.pop()
+        elif ch in delimiters and not stack:
+            chunks.append(buf.strip())
+            buf = ''
+
+    if buf.strip():
+        chunks.append(buf.strip())
     return chunks
+
+def group_chunks(chunks, n=10):
+    grouped = []
+    for i in range(0, len(chunks), n):
+        grouped.append(''.join(chunks[i:i+n]))
+    return grouped
 
 def translate_with_retry(text):
     for _ in range(DEEPL_RETRY):
@@ -140,10 +144,14 @@ for novel_url in urls:
             with open(jp_file, 'w', encoding='utf-8') as f:
                 f.write(f'{sub_title}\n\n{sub_body_text}')
 
+            # 分割＆翻訳処理
+            chunks = split_by_delimiters(sub_body_text)
+            grouped_chunks = group_chunks(chunks, n=10)
+
             translated_chunks = []
-            for chunk in split_text(sub_body_text):
-                translated = translate_with_retry(chunk)
-                translated = fix_incomplete_translation(chunk, translated)
+            for group in grouped_chunks:
+                translated = translate_with_retry(group)
+                translated = fix_incomplete_translation(group, translated)
                 translated_chunks.append(translated)
 
             translated_text = '\n'.join(translated_chunks)
