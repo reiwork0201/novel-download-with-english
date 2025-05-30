@@ -14,6 +14,9 @@ DEEPL_RETRY = 3
 
 DEEPL = DeepLCLI("ja", "en")
 
+# rcloneアップロード前のエラー防止用に事前作成
+os.makedirs('/tmp/narou_dl', exist_ok=True)
+
 def fetch_url(url):
     headers = {'User-Agent': 'Mozilla/5.0'}
     return requests.get(url, headers=headers)
@@ -64,10 +67,7 @@ def split_by_delimiters(text):
     return chunks
 
 def group_chunks(chunks, n=10):
-    grouped = []
-    for i in range(0, len(chunks), n):
-        grouped.append(''.join(chunks[i:i+n]))
-    return grouped
+    return [''.join(chunks[i:i+n]) for i in range(0, len(chunks), n)]
 
 def translate_with_retry(text):
     for _ in range(DEEPL_RETRY):
