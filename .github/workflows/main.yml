@@ -20,8 +20,7 @@ jobs:
 
       - name: Install Python Dependencies
         run: |
-          pip install requests beautifulsoup4 deepl-cli
-
+          pip install requests beautifulsoup4 openai
       - name: Install rclone
         run: |
           curl https://rclone.org/install.sh | sudo bash
