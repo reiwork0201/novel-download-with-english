@@ -65,7 +65,7 @@ def get_episode_links(novel_url):
         return []
     base_url = base_url_match.group(1)
     episode_links = [(f"{base_url}/episodes/{ep_id}", ep_title) for ep_id, ep_title in matches]
-    print(f"{len(episode_links)} 話の目標情報を取得しました。")
+    print(f"{len(episode_links)} 話のエピソード情報を取得しました。")
     return episode_links
 
 def split_text_for_translation(text, max_chunk_len=1500):
@@ -107,21 +107,16 @@ def download_episode(episode_url, title, novel_title, index):
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
     body = soup.select_one("div.widget-episodeBody").get_text("\n", strip=True)
-    folder_num = (index // 999) + 1
-    folder_name = f"{folder_num:03d}"
     safe_novel_title = re.sub(r'[\\/*?:"<>|]', '_', novel_title)[:30]
-    base_folder_path = os.path.join(DOWNLOAD_DIR_BASE, safe_novel_title, folder_name)
-    jp_path = os.path.join(base_folder_path, 'japanese')
-    en_path = os.path.join(base_folder_path, 'english')
+    base_path = os.path.join(DOWNLOAD_DIR_BASE, safe_novel_title, f"{index+1:03d}")
+    jp_path = os.path.join(base_path, 'japanese')
+    en_path = os.path.join(base_path, 'english')
     os.makedirs(jp_path, exist_ok=True)
     os.makedirs(en_path, exist_ok=True)
-    file_name = f"{index + 1:03d}.txt"
-    jp_file = os.path.join(jp_path, file_name)
-    en_file = os.path.join(en_path, file_name)
-    with open(jp_file, "w", encoding="utf-8") as f:
+    with open(os.path.join(jp_path, "本文.txt"), "w", encoding="utf-8") as f:
         f.write(body)
     translated = translate_text(body)
-    with open(en_file, "w", encoding="utf-8") as f:
+    with open(os.path.join(en_path, "本文.txt"), "w", encoding="utf-8") as f:
         f.write(translated)
     if (index + 1) % 300 == 0:
         print(f"{index + 1}話ダウンロード完了。30秒の休憩を取ります...")
