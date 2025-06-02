@@ -4,12 +4,16 @@ import time
 import requests
 import subprocess
 from bs4 import BeautifulSoup
+from deepl import DeepLCLI  # 自作のCLIラッパー
 
 BASE_URL = "https://kakuyomu.jp"
-HISTORY_FILE = "\u30ab\u30af\u30e8\u30e0\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9\u7d4c\u6b74.txt"
+HISTORY_FILE = "カクヨムダウンロード経歴.txt"
 LOCAL_HISTORY_PATH = f"/tmp/{HISTORY_FILE}"
 REMOTE_HISTORY_PATH = f"drive:{HISTORY_FILE}"
 DOWNLOAD_DIR_BASE = "/tmp/kakuyomu_dl"
+
+DEEPL = DeepLCLI("ja", "en")
+DEEPL_RETRY = 3
 
 os.makedirs(DOWNLOAD_DIR_BASE, exist_ok=True)
 
@@ -40,31 +44,28 @@ def get_novel_title(novel_url):
     title_tag = soup.find("title")
     if title_tag:
         title_text = title_tag.text.strip()
-        title_text = re.sub(r'\s*[-ー]?\s*\u30ab\u30af\u30e8\u30e0.*$', '', title_text)
+        title_text = re.sub(r'\s*[-ー]?\s*カクヨム.*$', '', title_text)
         return title_text
     else:
-        return "\u30bf\u30a4\u30c8\u30eb\u306a\u3057"
+        return "タイトルなし"
 
 def get_episode_links(novel_url):
     response = requests.get(novel_url)
     response.raise_for_status()
     body = response.text
-    print("\u5c0f\u8aac\u60c5\u5831\u3092\u53d6\u5f97\u4e2d...")
+    print("小説情報を取得中...")
     ep_pattern = r'"__typename":"Episode","id":"(.*?)","title":"(.*?)"'
     matches = re.findall(ep_pattern, body)
     if not matches:
-        print("\u6307\u5b9a\u3055\u308c\u305f\u30da\u30fc\u30b8\u304b\u3089\u30a8\u30d4\u30bd\u30fc\u30c9\u60c5\u5831\u3092\u53d6\u5f97\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002")
+        print("指定されたページからエピソード情報を取得できませんでした。")
         return []
     base_url_match = re.match(r"(https://kakuyomu.jp/works/\d+)", novel_url)
     if not base_url_match:
-        print("\u5c0f\u8aac\u306eURL\u304b\u3089\u30d9\u30fc\u30b9URL\u3092\u62bd\u51fa\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002")
+        print("小説のURLからベースURLを抽出できませんでした。")
         return []
     base_url = base_url_match.group(1)
-    episode_links = []
-    for ep_id, ep_title in matches:
-        full_url = f"{base_url}/episodes/{ep_id}"
-        episode_links.append((full_url, ep_title))
-    print(f"{len(episode_links)} \u8a71\u306e\u76ee\u6a19\u60c5\u5831\u3092\u53d6\u5f97\u3057\u307e\u3057\u305f\u3002")
+    episode_links = [(f"{base_url}/episodes/{ep_id}", ep_title) for ep_id, ep_title in matches]
+    print(f"{len(episode_links)} 話の目標情報を取得しました。")
     return episode_links
 
 def split_text_for_translation(text, max_chunk_len=1500):
@@ -88,21 +89,16 @@ def translate_text(text):
     chunks = split_text_for_translation(text)
     translated = []
     for chunk in chunks:
-        try:
-            result = subprocess.run(
-                ['deepl', '--to', 'EN', '--formality', 'prefer-less', '-'],
-                input=chunk, text=True, capture_output=True, check=True
-            ).stdout.strip()
-            if re.search(r'[\u3040-\u30FF\u4E00-\u9FFF]', result):
-                retry = subprocess.run(
-                    ['deepl', '--to', 'EN', '--formality', 'prefer-less', '-'],
-                    input=chunk, text=True, capture_output=True, check=True
-                ).stdout.strip()
-                if not re.search(r'[\u3040-\u30FF\u4E00-\u9FFF]', retry):
-                    result = retry
-            translated.append(result)
-        except Exception as e:
-            print(f"\u7ffb\u8a33\u30a8\u30e9\u30fc: {e}")
+        for attempt in range(DEEPL_RETRY):
+            try:
+                result = DEEPL.translate(chunk).strip()
+                if re.search(r'[\u3040-\u30FF\u4E00-\u9FFF]', result):
+                    continue  # 日本語が残っていたら再試行
+                translated.append(result)
+                break
+            except Exception as e:
+                print(f"翻訳エラー (試行{attempt + 1}): {e}")
+        else:
             translated.append("[TRANSLATION FAILED]")
     return "\n\n".join(translated)
 
@@ -128,13 +124,13 @@ def download_episode(episode_url, title, novel_title, index):
     with open(en_file, "w", encoding="utf-8") as f:
         f.write(translated)
     if (index + 1) % 300 == 0:
-        print(f"{index + 1}\u8a71\u30c0\u30a6\u30f3\u30ed\u30fc\u30c9\u5b8c\u4e86\u300230\u79d2\u306e\u4f11\u61a9\u3092\u53d6\u308a\u307e\u3059...")
+        print(f"{index + 1}話ダウンロード完了。30秒の休憩を取ります...")
         time.sleep(30)
 
 def download_novels(urls, history):
     for novel_url in urls:
         try:
-            print(f'\n--- \u51e6\u7406\u958b\u59cb: {novel_url} ---')
+            print(f'\n--- 処理開始: {novel_url} ---')
             novel_title = get_novel_title(novel_url)
             novel_title = re.sub(r'[\\/*?:"<>|]', '', novel_title).strip()
             episode_links = get_episode_links(novel_url)
@@ -148,7 +144,7 @@ def download_novels(urls, history):
                 new_max = i + 1
             history[novel_url] = new_max
         except Exception as e:
-            print(f"\u30a8\u30e9\u30fc\u767a\u751f: {novel_url} \u2192 {e}")
+            print(f"エラー発生: {novel_url} → {e}")
             continue
 
 if __name__ == "__main__":
