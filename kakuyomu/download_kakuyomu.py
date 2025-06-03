@@ -132,8 +132,11 @@ def download_episode(episode_url, title, novel_title, index):
     with open(en_file_path, "w", encoding="utf-8") as f:
         f.write(translated)
 
+    print(f"{index + 1}話完了。15秒休憩します...")
+    time.sleep(15)
+
     if (index + 1) % 300 == 0:
-        print(f"{index + 1}話ダウンロード完了。30秒の休憩を取ります...")
+        print(f"{index + 1}話ダウンロード完了。追加で30秒の休憩を取ります...")
         time.sleep(30)
 
 def download_novels(urls, history):
